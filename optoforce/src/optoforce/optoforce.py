@@ -70,7 +70,7 @@ class OptoforceDriver(object):
         """
         port = rospy.get_param("~port", "/dev/ttyACM0")
         self._serial = serial.Serial(port, 1000000, timeout=None)
-        self._sensor_type = self._OPTOFORCE_TYPE_34
+        self._sensor_type = self._OPTOFORCE_TYPE_31
         self._publishers = []
         self._wrenches = []
 
@@ -80,6 +80,11 @@ class OptoforceDriver(object):
                 wrench = WrenchStamped()
                 wrench.header.frame_id = "optoforce_" + str(i)
                 self._wrenches.append(wrench)
+        elif self._sensor_type == self._OPTOFORCE_TYPE_31:
+            self._publishers.append(rospy.Publisher("optoforce_31", WrenchStamped, queue_size=100))
+            wrench = WrenchStamped()
+            wrench.header.frame_id = "optoforce_31"
+            self._wrenches.append(wrench)
 
     def config(self):
         speed = self._speed_values[rospy.get_param("~speed", "100Hz")]
@@ -112,6 +117,7 @@ class OptoforceDriver(object):
                 self._publish(data)
 
     def _decode(self, frame):
+
         """
         Decodes a sensor frame
         It assumes that we get an entire frame and nothing else from serial.read. This assumption simplifies the code
@@ -119,6 +125,7 @@ class OptoforceDriver(object):
         @param frame - byte frame from the sensor
         """
         if not self._is_checksum_valid(frame):
+            print frame
             rospy.logwarn("Bad checksum")
             # This is a trick to recover the frame synchronisation without having to implement a state machine.
             # We are assuming that the reception of a config response frame (of shorter length) is the cause
@@ -142,6 +149,16 @@ class OptoforceDriver(object):
                     val = float(val) / self._scale
                     force_axes.append(val)
                 data.force.append(force_axes)
+
+        elif self._sensor_type == self._OPTOFORCE_TYPE_31:
+            force_axes = []
+            for __ in range(3):  # 3 axes per sensor
+                offset += 2
+                val = struct.unpack_from('>h', frame, offset)[0]
+                # TODO Convert to Newtons (needs sensitivity report)
+                val = float(val) / self._scale
+                force_axes.append(val)
+            data.force.append(force_axes)
         return data
 
     def _publish(self, data):
@@ -153,6 +170,13 @@ class OptoforceDriver(object):
                 self._wrenches[i].wrench.force.y = data.force[i][1]
                 self._wrenches[i].wrench.force.z = data.force[i][2]
                 self._publishers[i].publish(self._wrenches[i])
+
+        if self._sensor_type == self._OPTOFORCE_TYPE_31:
+            self._wrenches[0].header.stamp = stamp
+            self._wrenches[0].wrench.force.x = data.force[0][0]
+            self._wrenches[0].wrench.force.y = data.force[0][1]
+            self._wrenches[0].wrench.force.z = data.force[0][2]
+            self._publishers[0].publish(self._wrenches[0])
 
     @staticmethod
     def _checksum(frame, length):
